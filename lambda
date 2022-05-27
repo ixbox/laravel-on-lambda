@@ -1,0 +1,50 @@
+#!/usr/bin/env php
+<?php
+
+require __DIR__ . '/vendor/autoload.php';
+
+use App\Octane\LambdaClient;
+use GuzzleHttp\Client;
+use GuzzleHttp\Psr7\HttpFactory;
+use Laravel\Octane\ApplicationFactory;
+use Laravel\Octane\RequestContext;
+use Laravel\Octane\Stream;
+use Laravel\Octane\Worker;
+use Phambda\Http\Psr\HttpWorker;
+use Psr\Http\Message\ServerRequestInterface;
+
+$client = new Client([
+    'base_uri' => 'http://' . getenv('AWS_LAMBDA_RUNTIME_API') . '/2018-06-01/',
+]);
+$factory = new HttpFactory();
+
+$client = new LambdaClient($psr7Client = new HttpWorker(
+    new Phambda\Worker($client, $factory, $factory),
+    $factory,
+    $factory
+));
+
+$worker = null;
+
+while ($psr7Request = $psr7Client->nextRequest()) {
+    try {
+        $worker = $worker ?: tap((new Worker(
+            new ApplicationFactory(__DIR__),
+            $client
+        )))->boot();
+    } catch (Throwable $e) {
+        Stream::shutdown($e);
+
+        exit(1);
+    }
+
+    if (!$psr7Request instanceof ServerRequestInterface) {
+        break;
+    }
+
+    [$request, $context] = $client->marshalRequest(new RequestContext([
+        'psr7Request' => $psr7Request
+    ]));
+
+    $worker->handle($request, $context);
+}
